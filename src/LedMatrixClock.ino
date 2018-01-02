@@ -38,7 +38,7 @@ const byte digits[10][8] PROGMEM = {
 		,B00000111
 		,B00000001
 		,B00000001
-		,B00000111
+		,B00000011
 		,B00000001
 		,B00000111
 		,B00000000
@@ -148,8 +148,8 @@ const char daysOfWeek[7][10] PROGMEM = {
 */
 LedControl lc1 = LedControl(12, 11, 10, 2);
 RTC_DS3231 rtc;
-uint8_t prevMinutes = 0;
-uint8_t prevHour = 0;
+uint8_t prevMinutes = 99; // 99 fixes a bug: if you turn the unit on at xx:00 the 00 will not display beacuse the currentminutes equal the prevminutes
+uint8_t prevHour = 99; // 99 fixes a bug: if you turn the unit on at 00:xx the 00 will not display beacuse the currenthour equal the prevhour
 
 const uint8_t photocellPin = A3;
 int photocellReading = 0;
@@ -165,12 +165,24 @@ const uint8_t dataPin = A2;
 const uint8_t clockPin = A0;
 byte buttonStates = 0;
 
-const byte buttonMaskEdit =   B00000001;
-const byte buttonMaskUp =     B00000010;
-const byte buttonMaskDown =   B00000100;
-const byte buttonMaskAlarm =  B00001000;
-const byte buttonMaskDate =   B00010000;
-const byte buttonMaskSnooze = B00100000;
+const byte ledMatrixCount = 2;
+// original
+//const byte ledMatrixLeft = 0;
+//const byte ledMatrixRight = 1;
+// upside down
+const byte ledMatrixLeft = 1;
+const byte ledMatrixRight = 0;
+
+/*
+ O4 O3 O2 O1 O6
+    O5    O5
+*/
+const byte buttonMaskEdit =   B00001000; // 4
+const byte buttonMaskUp =     B00000100; // 3
+const byte buttonMaskDown =   B00000010; // 2
+const byte buttonMaskAlarm =  B00000001; // 1
+const byte buttonMaskDate =   B00100000; // 6
+const byte buttonMaskSnooze = B00010000; // 5
 bool editMode = false;
 bool editHours = false;
 bool editMinutes = false;
@@ -233,6 +245,21 @@ byte shiftIn(int myDataPin, int myClockPin) {
 }
 
 /*
+* Flips a byte. Ex.: 01011 will become 11010
+* source: the byte to flip
+* returns: the byte with the bits in reversed order
+*/
+byte flipByte(byte source) {
+	char result = 0;
+	for (byte i = 0; i < 8; i++) {
+		result <<= 1;
+		result |= source & 1;
+		source >>= 1;
+	}
+	return result;
+}
+
+/*
 * Display a two digit number on a 8x8  led matrix, with the 4x8 font set
 * addr: address of the display
 * number: the number to display
@@ -244,15 +271,16 @@ void displayNumber(size_t addr, int number)
 
 	for (size_t digitLine = 0; digitLine < 8; digitLine++)
 	{
-		byte digitOnes = pgm_read_byte(&digits[ones][digitLine]) << (1 - addr);
-		byte digitTens = pgm_read_byte(&digits[tens][digitLine]) << (1 - addr);
-		lc1.setColumn(addr, digitLine, (digitTens << 4) | digitOnes);
+		byte digitOnes = pgm_read_byte(&digits[ones][digitLine]) << (-1 + (addr * 2)); // orig: 1 - addr???
+		byte digitTens = pgm_read_byte(&digits[tens][digitLine]) << (-1 + (addr * 2));
+		//lc1.setColumn(addr, digitLine, (digitTens << 4) | digitOnes); // original
+		lc1.setColumn(addr, 7 - digitLine, flipByte((digitTens << 4) | digitOnes)); // upside down
 	}
 }
 
 void displayError()
 {
-	for (size_t i = 0; i < 2; i++)
+	for (size_t i = 0; i < ledMatrixCount; i++)
 	{
 		for (size_t digitLine = 0; digitLine < 8; digitLine++)
 		{
@@ -291,24 +319,24 @@ void displayEditMode()
 {
 	if (!editMode)
 	{
-		lc1.setColumn(0, 0, B00000000);
-		lc1.setColumn(0, 7, B00000000);
-		lc1.setColumn(1, 0, B00000000);
-		lc1.setColumn(1, 7, B00000000);
+		lc1.setColumn(ledMatrixLeft, 0, B00000000);
+		lc1.setColumn(ledMatrixLeft, 7, B00000000);
+		lc1.setColumn(ledMatrixRight, 0, B00000000);
+		lc1.setColumn(ledMatrixRight, 7, B00000000);
 	}
 	else if (editHours)
 	{
-		lc1.setColumn(0, 0, B11111111);
-		lc1.setColumn(0, 7, B11111111);
-		lc1.setColumn(1, 0, B00000000);
-		lc1.setColumn(1, 7, B00000000);
+		lc1.setColumn(ledMatrixLeft, 0, B11111111);
+		lc1.setColumn(ledMatrixLeft, 7, B11111111);
+		lc1.setColumn(ledMatrixRight, 0, B00000000);
+		lc1.setColumn(ledMatrixRight, 7, B00000000);
 	}
 	else if (editMinutes)
 	{
-		lc1.setColumn(0, 0, B00000000);
-		lc1.setColumn(0, 7, B00000000);
-		lc1.setColumn(1, 0, B11111111);
-		lc1.setColumn(1, 7, B11111111);
+		lc1.setColumn(ledMatrixLeft, 0, B00000000);
+		lc1.setColumn(ledMatrixLeft, 7, B00000000);
+		lc1.setColumn(ledMatrixRight, 0, B11111111);
+		lc1.setColumn(ledMatrixRight, 7, B11111111);
 	}
 }
 
@@ -326,14 +354,14 @@ void setup()
 	The MAX72XX is in power-saving mode on startup,
 	we have to do a wakeup call
 	*/
-	lc1.shutdown(0, false);
-	lc1.shutdown(1, false);
+	lc1.shutdown(ledMatrixLeft, false);
+	lc1.shutdown(ledMatrixRight, false);
 	/* Set the brightness to a medium values */
-	lc1.setIntensity(0, displayBrightness);
-	lc1.setIntensity(1, displayBrightness);
+	lc1.setIntensity(ledMatrixLeft, displayBrightness);
+	lc1.setIntensity(ledMatrixRight, displayBrightness);
 	/* and clear the display */
-	lc1.clearDisplay(0);
-	lc1.clearDisplay(1);
+	lc1.clearDisplay(ledMatrixLeft);
+	lc1.clearDisplay(ledMatrixRight);
 
 	//displayNumber(0, 5);
 	//displayNumber(1, 7);
@@ -377,13 +405,14 @@ void setup()
 void loop()
 {
 	DateTime now;
+	DateTime nowRTC = rtc.now();
 	if (editMode)
 	{
 		now = editDateTime;
 	}
 	else
 	{
-		now = rtc.now();
+		now = nowRTC;
 	}
 
 	// display the hour
@@ -391,7 +420,7 @@ void loop()
 	if (currentHour != prevHour)
 	{
 		//Serial.println(dateTimeToString(now));
-		displayNumber(0, currentHour);
+		displayNumber(ledMatrixLeft, currentHour);
 		prevHour = currentHour;
 	}
 
@@ -400,7 +429,7 @@ void loop()
 	if (currentMinutes != prevMinutes)
 	{
 		//Serial.println(dateTimeToString(now));
-		displayNumber(1, currentMinutes);
+		displayNumber(ledMatrixRight, currentMinutes);
 		prevMinutes = currentMinutes;
 	}
 
@@ -411,8 +440,8 @@ void loop()
 	{
 		Serial.println(TMPdisplayBrightness);
 		displayBrightness = TMPdisplayBrightness;
-		lc1.setIntensity(0, displayBrightness);
-		lc1.setIntensity(1, displayBrightness);
+		lc1.setIntensity(ledMatrixLeft, displayBrightness);
+		lc1.setIntensity(ledMatrixRight, displayBrightness);
 	}
 
 	// buttons
@@ -491,6 +520,12 @@ void loop()
 	}
 
 	displayEditMode();
+
+	// DST!
+	//if (3 == nowRTC.month() && nowRTC.)
+	//{
+
+	//}
 
 	delay(100);
 
